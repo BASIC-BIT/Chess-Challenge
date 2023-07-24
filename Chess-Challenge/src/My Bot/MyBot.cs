@@ -17,8 +17,24 @@ public class MyBot : IChessBot
     private const int CAPTURE_WEIGHT = -1; // *slightly* punish captures, to encourage letting the enemy capture first
     private const int DEVELOP_WEIGHT = 5; // Reward developing a piece (moving it for the first time
     private const int CASTLE_WEIGHT = 5; // Reward for castling
+    private const int MINIMUM_DEPTH = 2; // Search every permutation at least this deep 
+    private const int MAXIMUM_DEPTH = 11; // Never go farther than this deep
 
-    public Random random;
+    private readonly IDictionary<ulong, List<MoveWeight>> _transpositionTable =
+        new Dictionary<ulong, List<MoveWeight>>();
+
+    public readonly Random random;
+
+    public class MoveWeight
+    {
+        public Move Move { get; set; }
+        public int Weight { get; set; }
+
+        public override string ToString()
+        {
+            return $"({Move.ToString()} Weight: {Weight})";
+        }
+    }
 
     public MyBot()
     {
@@ -32,59 +48,108 @@ public class MyBot : IChessBot
             return new Move("e2e4", board); //start strong!
         }
 
-        return GetRandomBestMove(Test(board, 4, true));
+        return GetRandomBestMove(Analyze(board, MINIMUM_DEPTH, true, 0));
     }
 
-    public IEnumerable<(Move move, int weight)> Test(Board board, int depth, bool myTurn)
+    // Extend search for things like captures
+    public int ExtendDepth(Board board, Move move, int depth, int totalDepth)
     {
-        var moveWeights = board.GetLegalMoves().Select((move) => (move, weight: GetWeight(board, move)));
+        var returnDepth = depth;
+        if (move.IsCapture)
+        {
+            returnDepth += 1;
+        }
+        else
+        {
+            board.MakeMove(move);
+
+            if (board.IsInCheck())
+            {
+                returnDepth += 1;
+            }
+
+            board.UndoMove(move);
+        }
+
+        return Math.Min(MAXIMUM_DEPTH, totalDepth + returnDepth) - totalDepth;
+    }
+
+    public List<MoveWeight> GetCachedMoveWeights(Board board)
+    {
+        if (_transpositionTable.TryGetValue(board.ZobristKey, out var weights))
+        {
+            return weights;
+        }
+
+        var generated = board.GetLegalMoves().Select((move) => new MoveWeight()
+        {
+            Move = move,
+            Weight = GetWeight(board, move),
+        }).ToList();
+
+        _transpositionTable.Add(board.ZobristKey, generated);
+
+        return generated;
+    }
+
+    public List<MoveWeight> Analyze(Board board, int depth, bool myTurn, int totalDepth)
+    {
+        var moveWeights = GetCachedMoveWeights(board);
 
         if (depth == 0)
         {
             return moveWeights;
         }
 
-        return moveWeights.Select(moveWeight =>
+        var output = moveWeights.Select(moveWeight =>
         {
-            board.MakeMove(moveWeight.move);
-            var output = Test(board, depth - 1, !myTurn);
+            var extendedDepth = ExtendDepth(board, moveWeight.Move, depth, totalDepth);
+            board.MakeMove(moveWeight.Move);
+            var output = Analyze(board, extendedDepth - 1, !myTurn, totalDepth + 1);
 
-            var highestWeight = GetHighestWeight(output) * (myTurn ? 1 : -1);
+            var highestWeight = GetHighestWeight(output);
 
-            board.UndoMove(moveWeight.move);
+            board.UndoMove(moveWeight.Move);
 
-            return (moveWeight.move, moveWeight.weight + highestWeight);
-        });
+            return new MoveWeight()
+            {
+                Move = moveWeight.Move,
+                Weight = moveWeight.Weight - highestWeight
+            };
+        }).ToList();
+
+        return output;
     }
 
-    public int GetHighestWeight(IEnumerable<(Move move, int weight)> moveWeights)
+    public int GetHighestWeight(List<MoveWeight> moveWeights)
     {
         return moveWeights.Aggregate(
             int.MinValue, (cur, next) =>
             {
-                if (next.weight > cur)
+                if (next.Weight > cur)
                 {
-                    return next.weight;
+                    return next.Weight;
                 }
 
                 return cur;
             });
     }
 
-    public Move GetRandomBestMove(IEnumerable<(Move move, int weight)> moveWeights)
+    public Move GetRandomBestMove(List<MoveWeight> moveWeights)
     {
+        Console.WriteLine("Candidate moves: " + String.Join(", ", moveWeights));
         return moveWeights.Aggregate(
             (bestWeight: int.MinValue, bestMoves: new List<Move>()), (cur, next) =>
             {
-                if (next.weight > cur.bestWeight)
+                if (next.Weight > cur.bestWeight)
                 {
-                    return (next.weight, new List<Move> { next.move });
+                    return (next.Weight, new List<Move> { next.Move });
                 }
 
-                if (next.weight == cur.bestWeight)
+                if (next.Weight == cur.bestWeight)
                 {
                     var newBestMoves = new List<Move>(cur.bestMoves);
-                    newBestMoves.Add(next.move);
+                    newBestMoves.Add(next.Move);
                     return (cur.bestWeight, newBestMoves);
                 }
 
@@ -96,7 +161,7 @@ public class MyBot : IChessBot
                 var move = best.bestMoves[index];
 
                 Console.WriteLine(
-                    $"Making {move.ToString()} Weight: {best.bestWeight} Other moves with equal weight: {best.bestMoves.Count - 1} which are {String.Join(", ", best.bestMoves.ToArray())}");
+                    $"Making {move.ToString()} Weight: {best.bestWeight}");
                 return move;
             });
     }
