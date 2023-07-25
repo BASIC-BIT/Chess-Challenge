@@ -22,7 +22,12 @@ public class MyBot : IChessBot
 
 
     private const int PRUNE_WEIGHT = -1000; // Stop calculating bad branches
-    private const int AUTO_ACCEPT_WEIGHT = 10000; // Stop calculating a obviously winning branch (currently a hack to get it to actually checkmate lol)
+
+    private const int
+        AUTO_ACCEPT_WEIGHT =
+            10000; // Stop calculating a obviously winning branch (currently a hack to get it to actually checkmate lol)
+
+    private const int DRAW_WEIGHT = -1000; // Draws are dumb, try to avoid them
 
     private readonly IDictionary<ulong, List<MoveWeight>> _transpositionTable =
         new Dictionary<ulong, List<MoveWeight>>();
@@ -52,16 +57,39 @@ public class MyBot : IChessBot
             return new Move("e2e4", board); //start strong!
         }
 
-        return GetRandomBestMove(Analyze(board, MINIMUM_DEPTH, true, 0));
+        return GetRandomBestMove(Analyze(board, MINIMUM_DEPTH, true, 0, timer));
+    }
+
+    public int GetMaxDepth(Timer timer)
+    {
+        if (timer.MillisecondsRemaining > 40000)
+        {
+            return MAXIMUM_DEPTH;
+        }
+        else if (timer.MillisecondsRemaining > 20000)
+        {
+            return MAXIMUM_DEPTH - 2;
+        }
+        else if (timer.MillisecondsRemaining > 10000)
+        {
+            return MAXIMUM_DEPTH - 4; // only 5 moves deep at this point, it won't calculate much but time is short!
+        }
+        else
+        {
+            return
+                MAXIMUM_DEPTH -
+                6; // Practically nothing but it has less than 10 seconds left and HAS to make moves or it loses
+        }
     }
 
     // Extend search for things like captures
-    public int ExtendDepth(Board board, Move move, int depth, int totalDepth)
+    public int ExtendDepth(Board board, Move move, int depth, int totalDepth, Timer timer)
     {
         if (depth > 1)
         {
             return depth;
         }
+
         var returnDepth = depth;
         if (move.IsCapture)
         {
@@ -79,7 +107,7 @@ public class MyBot : IChessBot
             board.UndoMove(move);
         }
 
-        return Math.Min(MAXIMUM_DEPTH, totalDepth + returnDepth) - totalDepth;
+        return Math.Min(GetMaxDepth(timer), totalDepth + returnDepth) - totalDepth;
     }
 
     public List<MoveWeight> GetCachedMoveWeights(Board board)
@@ -102,11 +130,11 @@ public class MyBot : IChessBot
         return generated;
     }
 
-    public List<MoveWeight> Analyze(Board board, int depth, bool myTurn, int totalDepth)
+    public List<MoveWeight> Analyze(Board board, int depth, bool myTurn, int totalDepth, Timer timer)
     {
         var moveWeights = GetCachedMoveWeights(board);
 
-        if (depth == 0)
+        if (depth < 1) // Allow for negatives, normally wouldn't happen but our extension method might limit us as the scheduler forces shallower calculation due to time pressure
         {
             return moveWeights;
         }
@@ -115,8 +143,9 @@ public class MyBot : IChessBot
         {
             return moveWeights;
         }
+
         var highestWeight = moveWeights[0].Weight;
-        
+
         if (highestWeight > AUTO_ACCEPT_WEIGHT)
         {
             return moveWeights; // Stop calculating if we have a mate, this is so hacky
@@ -129,16 +158,17 @@ public class MyBot : IChessBot
                 Console.WriteLine("Pruned " + moveWeight.Move);
                 return moveWeight;
             }
-            var extendedDepth = ExtendDepth(board, moveWeight.Move, depth, totalDepth);
+
+            var extendedDepth = ExtendDepth(board, moveWeight.Move, depth, totalDepth, timer);
             board.MakeMove(moveWeight.Move);
-            
+
             if (board.IsInCheckmate()) // A bit hacky - don't calculate further if it's checkmate
             {
                 board.UndoMove(moveWeight.Move);
                 return moveWeight;
             }
-            
-            var output = Analyze(board, extendedDepth - 1, !myTurn, totalDepth + 1);
+
+            var output = Analyze(board, extendedDepth - 1, !myTurn, totalDepth + 1, timer);
 
             var highestWeight = GetHighestWeight(output);
 
@@ -225,18 +255,25 @@ public class MyBot : IChessBot
             weight += CAPTURE_WEIGHT;
         }
 
+        var startFile = move.StartSquare.File;
+        var endFile = move.TargetSquare.File;
+
         if (move.IsCastles == false &&
             ((move.MovePieceType == PieceType.King && (board.HasKingsideCastleRight(board.IsWhiteToMove) ||
                                                        board.HasQueensideCastleRight(board.IsWhiteToMove))) ||
              (move.MovePieceType == PieceType.Rook &&
-              ((move.StartSquare.File == 0 && board.HasQueensideCastleRight(board.IsWhiteToMove)) ||
-               (move.StartSquare.File == 7 && board.HasKingsideCastleRight(board.IsWhiteToMove))))))
+              ((startFile == 0 && board.HasQueensideCastleRight(board.IsWhiteToMove)) ||
+               (startFile == 7 && board.HasKingsideCastleRight(board.IsWhiteToMove))))))
         {
             weight += NO_MORE_CASTLE_WEIGHT;
         }
 
-        if (move.MovePieceType != PieceType.Pawn && move.MovePieceType != PieceType.King &&
-            IsStartPosition(move.StartSquare, move.MovePieceType, board.IsWhiteToMove))
+        // Simple check for "developing" a piece, encouraging pieces to move off the back rank
+        // Also, ignore the king and queen to discourage moving them in the early game
+        if (move.MovePieceType != PieceType.King &&
+            move.MovePieceType != PieceType.Queen &&
+            (board.IsWhiteToMove && startFile == 0 && endFile != 0) ||
+            (!board.IsWhiteToMove && startFile == 7 && endFile != 7))
         {
             weight += DEVELOP_WEIGHT;
         }
@@ -246,34 +283,20 @@ public class MyBot : IChessBot
         {
             weight += CHECK_WEIGHT;
         }
-        
+
         if (board.IsInCheckmate())
         {
             weight += CHECKMATE_WEIGHT;
         }
-        
+
+        // This should also calculate based upon material left on the board.  I want a draw if I'm down material, and I want to avoid it otherwise
+        if (board.IsDraw())
+        {
+            weight += DRAW_WEIGHT;
+        }
+
         board.UndoMove(move);
 
         return weight;
-    }
-
-    private bool IsStartPosition(Square square, PieceType piece, bool isWhite)
-    {
-        if (isWhite)
-        {
-            if (piece == PieceType.Pawn && square.Rank != 1) return false;
-            if (piece != PieceType.Pawn && square.Rank != 0) return false;
-        }
-        else
-        {
-            if (piece == PieceType.Pawn && square.Rank != 6) return false;
-            if (piece != PieceType.Pawn && square.Rank != 7) return false;
-        }
-
-        return (piece == PieceType.Rook && square.File is 0 or 7) ||
-               (piece == PieceType.Knight && square.File is 1 or 6) ||
-               (piece == PieceType.Bishop && square.File is 2 or 5) ||
-               (piece == PieceType.King && square.File == 4) ||
-               (piece == PieceType.Queen && square.File == 3);
     }
 }
