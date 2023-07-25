@@ -68,7 +68,7 @@ namespace ChessChallenge.Chess
 
 
 
-        public Board(Board source = null)
+        public Board(Board? source = null)
         {
             if (source != null)
             {
@@ -76,10 +76,10 @@ namespace ChessChallenge.Chess
                 LoadPosition(fen);
 
                 RepetitionPositionHistory = new(source.RepetitionPositionHistory);
-                //AllGameMoves = new(source.AllGameMoves);
-                //Console.WriteLine(source.gameStateHistory.Count);
-                //gameStateHistory = new(source.gameStateHistory);
+                AllGameMoves = new(source.AllGameMoves);
+           
                 currentGameState = source.currentGameState;
+               
             }
 
         }
@@ -266,9 +266,12 @@ namespace ChessChallenge.Chess
             UpdateSliderBitboards();
 
             // Pawn moves and captures reset the fifty move counter and clear 3-fold repetition history
-            if (!inSearch && (movedPieceType == PieceHelper.Pawn || capturedPieceType != PieceHelper.None))
+            if (movedPieceType == PieceHelper.Pawn || capturedPieceType != PieceHelper.None)
             {
-                RepetitionPositionHistory.Clear();
+                if (!inSearch)
+                {
+                    RepetitionPositionHistory.Clear();
+                }
                 newFiftyMoveCounter = 0;
             }
 

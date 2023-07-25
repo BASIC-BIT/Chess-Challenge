@@ -3,6 +3,8 @@ using Raylib_cs;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.IO;
+using static ChessChallenge.Application.UIHelper;
 
 namespace ChessChallenge.Application
 {
@@ -52,10 +54,8 @@ namespace ChessChallenge.Application
         public BoardUI()
         {
             theme = new BoardTheme();
-            piecesTexture = Raylib.LoadTexture(UIHelper.GetResourcePath("Pieces.png"));
-            Raylib.GenTextureMipmaps(ref piecesTexture);
-            Raylib.SetTextureWrap(piecesTexture, TextureWrap.TEXTURE_WRAP_CLAMP);
-            Raylib.SetTextureFilter(piecesTexture, TextureFilter.TEXTURE_FILTER_BILINEAR);
+
+            LoadPieceTexture();
 
             board = new Board();
             board.LoadStartPosition();
@@ -276,9 +276,6 @@ namespace ChessChallenge.Application
                 }
                 UIHelper.DrawText(timeText, timePos, fontSize, fontSpacing, textCol, UIHelper.AlignH.Right);
             }
-
-
-            //Raylib.DrawText()
         }
 
         public void ResetSquareColours(bool keepPrevMoveHighlight = false)
@@ -318,9 +315,30 @@ namespace ChessChallenge.Application
             {
                 DrawPiece(piece, new Vector2((int)pos.X, (int)pos.Y), alpha);
             }
+
+            if (Settings.DisplayBoardCoordinates)
+            {
+                int textSize = 25;
+                float xpadding = 5f;
+                float ypadding = 2f;
+                Color coordNameCol = coord.IsLightSquare() ? theme.DarkCoordCol : theme.LightCoordCol;
+
+                if (rank == (whitePerspective ? 0 : 7))
+                {
+                    string fileName = BoardHelper.fileNames[file] + "";
+                    Vector2 drawPos = pos + new Vector2(xpadding, squareSize - ypadding);
+                    DrawText(fileName, drawPos, textSize, 0, coordNameCol, AlignH.Left, AlignV.Bottom);
+                }
+                if (file == (whitePerspective ? 7 : 0))
+                {
+                    string rankName = (rank + 1) + "";
+                    Vector2 drawPos = pos + new Vector2(squareSize - xpadding, ypadding);
+                    DrawText(rankName, drawPos, textSize, 0, coordNameCol, AlignH.Right, AlignV.Top);
+                }
+            }
         }
 
-        Vector2 GetSquarePos(int file, int rank, bool whitePerspective)
+        static Vector2 GetSquarePos(int file, int rank, bool whitePerspective)
         {
             const int boardStartX = -squareSize * 4;
             const int boardStartY = -squareSize * 4;
@@ -363,6 +381,19 @@ namespace ChessChallenge.Application
                 t = Math.Min(1, Math.Max(t, 0));
                 return a + (b - a) * t;
             }
+        }
+
+        void LoadPieceTexture()
+        {
+            // Workaround for Raylib.LoadTexture() not working when path contains non-ascii chars
+            byte[] pieceImgBytes = File.ReadAllBytes(GetResourcePath("Pieces.png"));
+            Image pieceImg = Raylib.LoadImageFromMemory(".png", pieceImgBytes);
+            piecesTexture = Raylib.LoadTextureFromImage(pieceImg);
+            Raylib.UnloadImage(pieceImg);
+
+            Raylib.GenTextureMipmaps(ref piecesTexture);
+            Raylib.SetTextureWrap(piecesTexture, TextureWrap.TEXTURE_WRAP_CLAMP);
+            Raylib.SetTextureFilter(piecesTexture, TextureFilter.TEXTURE_FILTER_BILINEAR);
         }
 
         public void Release()
