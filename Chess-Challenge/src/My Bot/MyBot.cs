@@ -18,7 +18,11 @@ public class MyBot : IChessBot
     private const int DEVELOP_WEIGHT = 5; // Reward developing a piece (moving it for the first time
     private const int CASTLE_WEIGHT = 5; // Reward for castling
     private const int MINIMUM_DEPTH = 2; // Search every permutation at least this deep 
-    private const int MAXIMUM_DEPTH = 11; // Never go farther than this deep
+    private const int MAXIMUM_DEPTH = 9; // Never go farther than this deep
+
+
+    private const int PRUNE_WEIGHT = -1000; // Stop calculating bad branches
+    private const int AUTO_ACCEPT_WEIGHT = 10000; // Stop calculating a obviously winning branch (currently a hack to get it to actually checkmate lol)
 
     private readonly IDictionary<ulong, List<MoveWeight>> _transpositionTable =
         new Dictionary<ulong, List<MoveWeight>>();
@@ -54,6 +58,10 @@ public class MyBot : IChessBot
     // Extend search for things like captures
     public int ExtendDepth(Board board, Move move, int depth, int totalDepth)
     {
+        if (depth > 1)
+        {
+            return depth;
+        }
         var returnDepth = depth;
         if (move.IsCapture)
         {
@@ -87,6 +95,8 @@ public class MyBot : IChessBot
             Weight = GetWeight(board, move),
         }).ToList();
 
+        generated.Sort((x, y) => y.Weight.CompareTo(x.Weight));
+
         _transpositionTable.Add(board.ZobristKey, generated);
 
         return generated;
@@ -101,10 +111,33 @@ public class MyBot : IChessBot
             return moveWeights;
         }
 
+        if (moveWeights.Count == 0) //TODO: How the heck is this happening?
+        {
+            return moveWeights;
+        }
+        var highestWeight = moveWeights[0].Weight;
+        
+        if (highestWeight > AUTO_ACCEPT_WEIGHT)
+        {
+            return moveWeights; // Stop calculating if we have a mate, this is so hacky
+        }
+
         var output = moveWeights.Select(moveWeight =>
         {
+            if (moveWeight.Weight < PRUNE_WEIGHT) // This pruning function literally never happens
+            {
+                Console.WriteLine("Pruned " + moveWeight.Move);
+                return moveWeight;
+            }
             var extendedDepth = ExtendDepth(board, moveWeight.Move, depth, totalDepth);
             board.MakeMove(moveWeight.Move);
+            
+            if (board.IsInCheckmate()) // A bit hacky - don't calculate further if it's checkmate
+            {
+                board.UndoMove(moveWeight.Move);
+                return moveWeight;
+            }
+            
             var output = Analyze(board, extendedDepth - 1, !myTurn, totalDepth + 1);
 
             var highestWeight = GetHighestWeight(output);
@@ -213,12 +246,12 @@ public class MyBot : IChessBot
         {
             weight += CHECK_WEIGHT;
         }
-
+        
         if (board.IsInCheckmate())
         {
             weight += CHECKMATE_WEIGHT;
         }
-
+        
         board.UndoMove(move);
 
         return weight;
