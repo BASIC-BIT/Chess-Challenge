@@ -16,9 +16,15 @@ public class MyBot : IChessBot
     private const int NO_MORE_CASTLE_WEIGHT = -5; // Punish moving the king without castling
     private const int CAPTURE_WEIGHT = -1; // *slightly* punish captures, to encourage letting the enemy capture first
     private const int DEVELOP_WEIGHT = 5; // Reward developing a piece (moving it for the first time
-    private const int CASTLE_WEIGHT = 5; // Reward for castling
+    private const int CASTLE_WEIGHT = 40; // Reward for castling
     private const int MINIMUM_DEPTH = 2; // Search every permutation at least this deep 
     private const int MAXIMUM_DEPTH = 9; // Never go farther than this deep
+
+    
+    // Discourage the queen from moving in the opening
+    private const int MOVE_QUEEN_TOO_EARLY_WEIGHT = -100;
+    private const int MOVE_QUEEN_TOO_EARLY_THRESHOLD = 6;
+    
 
 
     private const int PRUNE_WEIGHT = -1000; // Stop calculating bad branches
@@ -62,24 +68,24 @@ public class MyBot : IChessBot
 
     public int GetMaxDepth(Timer timer)
     {
-        if (timer.MillisecondsRemaining > 40000)
+        if (timer.MillisecondsRemaining > 45000)
         {
             return MAXIMUM_DEPTH;
         }
-        else if (timer.MillisecondsRemaining > 20000)
+
+        if (timer.MillisecondsRemaining > 30000)
         {
             return MAXIMUM_DEPTH - 2;
         }
-        else if (timer.MillisecondsRemaining > 10000)
+
+        if (timer.MillisecondsRemaining > 15000)
         {
             return MAXIMUM_DEPTH - 4; // only 5 moves deep at this point, it won't calculate much but time is short!
         }
-        else
-        {
-            return
-                MAXIMUM_DEPTH -
-                6; // Practically nothing but it has less than 10 seconds left and HAS to make moves or it loses
-        }
+
+        return
+            MAXIMUM_DEPTH -
+            6; // Practically nothing but it has less than 10 seconds left and HAS to make moves or it loses
     }
 
     // Extend search for things like captures
@@ -200,7 +206,7 @@ public class MyBot : IChessBot
 
     public Move GetRandomBestMove(List<MoveWeight> moveWeights)
     {
-        Console.WriteLine("Candidate moves: " + String.Join(", ", moveWeights));
+        // Console.WriteLine("Candidate moves: " + String.Join(", ", moveWeights));
         return moveWeights.Aggregate(
             (bestWeight: int.MinValue, bestMoves: new List<Move>()), (cur, next) =>
             {
@@ -233,15 +239,21 @@ public class MyBot : IChessBot
     {
         var weight = 0;
         weight += pieceValues[(int)board.GetPiece(move.TargetSquare).PieceType]; // Reward capture
+        
 
-        if (move.MovePieceType == PieceType.Pawn)
+        var startRank = move.StartSquare.Rank;
+        var startFile = move.StartSquare.File;
+        var endRank = move.TargetSquare.Rank;
+        var movePieceType = move.MovePieceType;
+
+        if (movePieceType == PieceType.Pawn)
         {
-            weight += Math.Abs(move.StartSquare.Rank - move.TargetSquare.Rank) * PAWN_ADVANCE_WEIGHT;
+            weight += Math.Abs(startRank - endRank) * PAWN_ADVANCE_WEIGHT;
 
             if (move.IsPromotion)
             {
                 weight += pieceValues[(int)move.PromotionPieceType] -
-                          pieceValues[(int)move.MovePieceType]; // Reward promotion
+                          pieceValues[(int)movePieceType]; // Reward promotion
             }
         }
 
@@ -255,13 +267,17 @@ public class MyBot : IChessBot
             weight += CAPTURE_WEIGHT;
         }
 
-        var startFile = move.StartSquare.File;
-        var endFile = move.TargetSquare.File;
+        if (movePieceType == PieceType.Queen && board.PlyCount <= MOVE_QUEEN_TOO_EARLY_THRESHOLD)
+        {
+            weight += MOVE_QUEEN_TOO_EARLY_WEIGHT;
+        }
+
+        weight -= board.FiftyMoveCounter; //Discourage getting close to the fifty move rule
 
         if (move.IsCastles == false &&
-            ((move.MovePieceType == PieceType.King && (board.HasKingsideCastleRight(board.IsWhiteToMove) ||
+            ((movePieceType == PieceType.King && (board.HasKingsideCastleRight(board.IsWhiteToMove) ||
                                                        board.HasQueensideCastleRight(board.IsWhiteToMove))) ||
-             (move.MovePieceType == PieceType.Rook &&
+             (movePieceType == PieceType.Rook &&
               ((startFile == 0 && board.HasQueensideCastleRight(board.IsWhiteToMove)) ||
                (startFile == 7 && board.HasKingsideCastleRight(board.IsWhiteToMove))))))
         {
@@ -270,13 +286,14 @@ public class MyBot : IChessBot
 
         // Simple check for "developing" a piece, encouraging pieces to move off the back rank
         // Also, ignore the king and queen to discourage moving them in the early game
-        if (move.MovePieceType != PieceType.King &&
-            move.MovePieceType != PieceType.Queen &&
-            (board.IsWhiteToMove && startFile == 0 && endFile != 0) ||
-            (!board.IsWhiteToMove && startFile == 7 && endFile != 7))
-        {
-            weight += DEVELOP_WEIGHT;
-        }
+        // Disabling this logic for now because I'm a little worried this will encourage pieces to go BACK to the start rank
+        // if (movePieceType != PieceType.King &&
+        //     movePieceType != PieceType.Queen &&
+        //     (board.IsWhiteToMove && startRank == 0 && endRank != 0) ||
+        //     (!board.IsWhiteToMove && startRank == 7 && endRank != 7))
+        // {
+        //     weight += DEVELOP_WEIGHT;
+        // }
 
         board.MakeMove(move);
         if (board.IsInCheck())
